@@ -12,6 +12,8 @@ class SupabaseError(RuntimeError):
 
 def supabase_request(method, path, body=None, prefer=None):
     project_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    if project_url.endswith("/rest/v1"):
+        project_url = project_url[:-len("/rest/v1")]
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     if not project_url or not service_key:
         raise SupabaseError("Supabase server credentials are not configured.")

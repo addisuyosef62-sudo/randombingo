@@ -10,7 +10,7 @@ from telegram.helpers import escape_markdown
 from auth_utils import hash_password
 from supabase_client import SupabaseError, supabase_request
 
-BOT_TOKEN = '9267476327:AAFl8y4cHGgQ6il5hJz7IFUDb0UYj7DsDcU'
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-mini-app-url.com")
 ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
 
