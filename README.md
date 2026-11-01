@@ -4,6 +4,8 @@
 
 The static game is a browser demo. Deposits are recorded for admin review; approval only changes the request status and does not credit the browser balance. Promo codes can award 40 ETB to a user's local demo balance once per code, but the reward is not withdrawable. The Withdraw button opens an information screen; withdrawals are not accepted until wagering rules and server-verified winnings are implemented.
 
+Before the first Pages deployment, enable GitHub Pages in the repository under **Settings → Pages**, and set **Build and deployment → Source** to **GitHub Actions**. The workflow deploys the static game after that one-time setup.
+
 1. Deploy [`render.yaml`](./render.yaml) as a Render Blueprint. A single Render web service serves the Mini App at `https://randombingo.onrender.com/app` and receives Telegram bot updates through a webhook, so a paid worker is not needed.
 2. Configure the Render environment variables:
    - `SUPABASE_URL`
