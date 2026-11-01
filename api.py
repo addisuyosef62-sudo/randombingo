@@ -88,6 +88,16 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "service": "Bingo Habesha API",
+        "health": "/health",
+        "docs": "/docs",
+    }
+
+
 @app.get("/api/payment-methods")
 def list_payment_methods():
     settings_keys = ("payment_telebirr", "payment_cbe")

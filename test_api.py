@@ -16,6 +16,17 @@ class DepositApiTests(unittest.TestCase):
             payment_proof="confirmed bank transfer",
         )
 
+    def test_root_returns_api_status_and_discovery_links(self):
+        self.assertEqual(
+            api.root(),
+            {
+                "status": "ok",
+                "service": "Bingo Habesha API",
+                "health": "/health",
+                "docs": "/docs",
+            },
+        )
+
     def test_deposit_requires_telegram_auth(self):
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test-token"}):
             with self.assertRaises(HTTPException) as error:
