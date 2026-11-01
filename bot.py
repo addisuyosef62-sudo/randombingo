@@ -11,9 +11,9 @@ from telegram.helpers import escape_markdown
 from auth_utils import hash_password
 from supabase_client import SupabaseError, supabase_request
 
-BOT_TOKEN ='9267476327:AAFl8y4cHGgQ6il5hJz7IFUDb0UYj7DsDcU'
-WEB_APP_URL = 'https://randombingo.onrender.com/app'
-ADMIN_ID = '7902432584'
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEB_APP_URL = os.getenv("WEB_APP_URL", "https://randombingo.onrender.com/app")
+ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
 
 # Conversation states for Deposit
 WAITING_FOR_DEP_AMOUNT, WAITING_FOR_DEP_PROOF, CONFIRM_DEPOSIT = range(3)

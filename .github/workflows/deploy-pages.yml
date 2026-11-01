@@ -30,7 +30,7 @@ jobs:
         uses: actions/configure-pages@v5
         with:
           enablement: true
-          token: ${{ secrets.PAGES_TOKEN }}
+          token: ${{ github.token }}
       - name: Prepare static site
         run: |
           mkdir -p _site
