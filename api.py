@@ -1,19 +1,65 @@
 import json
 import os
 import re
-import urllib.error
-import urllib.request
+import hmac
+from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from telegram import MenuButtonWebApp, Update, WebAppInfo
+from telegram.error import TelegramError
 
 from auth_utils import hash_password, verify_password, verify_telegram_init_data
+from bot import create_application
 from supabase_client import SupabaseError, supabase_request
 
 
-app = FastAPI(title="Bingo Habesha API")
+async def configure_telegram(bot):
+    public_url = os.environ.get("PUBLIC_BASE_URL", "https://randombingo.onrender.com").rstrip("/")
+    webhook_secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    web_app_url = os.environ.get("WEB_APP_URL", "").strip()
+    if not webhook_secret or len(webhook_secret) < 32:
+        raise RuntimeError("Set TELEGRAM_WEBHOOK_SECRET to a random value of at least 32 characters.")
+    if not web_app_url:
+        web_app_url = f"{public_url}/app"
+
+    await bot.set_webhook(
+        url=f"{public_url}/telegram/webhook",
+        secret_token=webhook_secret,
+        allowed_updates=Update.ALL_TYPES,
+    )
+    await bot.set_chat_menu_button(
+        menu_button=MenuButtonWebApp(
+            text="Play Bingo",
+            web_app=WebAppInfo(url=web_app_url),
+        )
+    )
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    telegram_application = create_application()
+    initialized = False
+    started = False
+    try:
+        await telegram_application.initialize()
+        initialized = True
+        await telegram_application.start()
+        started = True
+        await configure_telegram(telegram_application.bot)
+        application.state.telegram_application = telegram_application
+        yield
+    finally:
+        if started:
+            await telegram_application.stop()
+        if initialized:
+            await telegram_application.shutdown()
+
+
+app = FastAPI(title="Bingo Habesha API", lifespan=lifespan)
 allowed_origin = os.environ.get("APP_ORIGIN", "").strip()
 if allowed_origin:
     app.add_middleware(
@@ -93,9 +139,48 @@ def root():
     return {
         "status": "ok",
         "service": "Bingo Habesha API",
+        "mini_app": "/app",
         "health": "/health",
         "docs": "/docs",
     }
+
+
+@app.get("/app", include_in_schema=False)
+def mini_app_page():
+    return FileResponse(
+        os.path.join(os.path.dirname(__file__), "index.html"),
+        media_type="text/html",
+    )
+
+
+@app.post("/telegram/webhook", include_in_schema=False)
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+):
+    secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    if not secret or not x_telegram_bot_api_secret_token or not hmac.compare_digest(
+        x_telegram_bot_api_secret_token, secret
+    ):
+        raise HTTPException(status_code=403, detail="Invalid webhook secret.")
+
+    try:
+        update_data = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid Telegram update.") from exc
+    if not isinstance(update_data, dict):
+        raise HTTPException(status_code=400, detail="Invalid Telegram update.")
+
+    telegram_application = getattr(request.app.state, "telegram_application", None)
+    if telegram_application is None:
+        raise HTTPException(status_code=503, detail="Telegram bot is not initialized.")
+    try:
+        update = Update.de_json(update_data, telegram_application.bot)
+        await telegram_application.update_queue.put(update)
+    except (TelegramError, ValueError) as exc:
+        print(f"Could not process Telegram webhook update: {exc}")
+        raise HTTPException(status_code=500, detail="Could not process Telegram update.") from exc
+    return {"ok": True}
 
 
 @app.get("/api/payment-methods")

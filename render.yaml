@@ -15,20 +15,9 @@ services:
         sync: false
       - key: TELEGRAM_ADMIN_ID
         sync: false
-
-  - type: worker
-    name: randombingo-bot
-    runtime: python
-    buildCommand: python -m pip install -r requirements.txt
-    startCommand: python -m bot
-    envVars:
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_ADMIN_ID
-        sync: false
       - key: WEB_APP_URL
-        sync: false
+        value: https://randombingo.onrender.com/app
+      - key: PUBLIC_BASE_URL
+        value: https://randombingo.onrender.com
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true

@@ -1,8 +1,11 @@
+import asyncio
 import os
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi import HTTPException
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 import api
@@ -22,10 +25,73 @@ class DepositApiTests(unittest.TestCase):
             {
                 "status": "ok",
                 "service": "Bingo Habesha API",
+                "mini_app": "/app",
                 "health": "/health",
                 "docs": "/docs",
             },
         )
+
+    def test_mini_app_route_serves_the_game_html(self):
+        response = api.mini_app_page()
+
+        self.assertIsInstance(response, FileResponse)
+        self.assertTrue(response.path.endswith("index.html"))
+        with open(response.path, encoding="utf-8") as game_page:
+            self.assertIn('name="bingo-api-url"', game_page.read())
+
+    @patch.dict(
+        os.environ,
+        {
+            "PUBLIC_BASE_URL": "https://randombingo.onrender.com",
+            "TELEGRAM_WEBHOOK_SECRET": "a" * 40,
+            "WEB_APP_URL": "https://randombingo.onrender.com/app",
+        },
+    )
+    def test_configures_telegram_webhook_and_menu_button(self):
+        telegram_bot = SimpleNamespace(
+            set_webhook=AsyncMock(),
+            set_chat_menu_button=AsyncMock(),
+        )
+
+        asyncio.run(api.configure_telegram(telegram_bot))
+
+        telegram_bot.set_webhook.assert_awaited_once_with(
+            url="https://randombingo.onrender.com/telegram/webhook",
+            secret_token="a" * 40,
+            allowed_updates=api.Update.ALL_TYPES,
+        )
+        menu_button = telegram_bot.set_chat_menu_button.call_args.kwargs["menu_button"]
+        self.assertEqual(menu_button.text, "Play Bingo")
+        self.assertEqual(menu_button.web_app.url, "https://randombingo.onrender.com/app")
+
+    def test_webhook_rejects_invalid_secret(self):
+        request = SimpleNamespace(
+            json=AsyncMock(return_value={}),
+            app=SimpleNamespace(state=SimpleNamespace()),
+        )
+        with patch.dict(os.environ, {"TELEGRAM_WEBHOOK_SECRET": "a" * 40}):
+            with self.assertRaises(HTTPException) as error:
+                asyncio.run(api.telegram_webhook(request, "wrong-secret"))
+        self.assertEqual(error.exception.status_code, 403)
+
+    def test_webhook_processes_authenticated_update(self):
+        telegram_application = SimpleNamespace(
+            bot=object(),
+            update_queue=SimpleNamespace(put=AsyncMock()),
+        )
+        request = SimpleNamespace(
+            json=AsyncMock(return_value={"update_id": 1}),
+            app=SimpleNamespace(
+                state=SimpleNamespace(telegram_application=telegram_application)
+            ),
+        )
+        with patch.dict(os.environ, {"TELEGRAM_WEBHOOK_SECRET": "a" * 40}):
+            with patch("api.Update.de_json", return_value="decoded-update"):
+                result = asyncio.run(
+                    api.telegram_webhook(request, "a" * 40)
+                )
+        self.assertEqual(result, {"ok": True})
+        telegram_application.update_queue.put.assert_awaited_once_with("decoded-update")
 
     def test_deposit_requires_telegram_auth(self):
         with patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "test-token"}):

@@ -11,8 +11,8 @@ from telegram.helpers import escape_markdown
 from auth_utils import hash_password
 from supabase_client import SupabaseError, supabase_request
 
-BOT_TOKEN = '9267476327:AAFl8y4cHGgQ6il5hJz7IFUDb0UYj7DsDcU'
-WEB_APP_URL = "https://randombingo.onrender.com"
+BOT_TOKEN ='9267476327:AAFl8y4cHGgQ6il5hJz7IFUDb0UYj7DsDcU'
+WEB_APP_URL = 'https://randombingo.onrender.com/app'
 ADMIN_ID = '7902432584'
 
 # Conversation states for Deposit
@@ -564,10 +564,7 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(rules_text, parse_mode="Markdown")
 
-def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("Set the TELEGRAM_BOT_TOKEN environment variable before starting the bot.")
-
+def create_application():
     if not BOT_TOKEN:
         raise RuntimeError("Set the TELEGRAM_BOT_TOKEN environment variable before starting the bot.")
     if ADMIN_ID <= 0:
@@ -614,6 +611,11 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_web_deposit_review, pattern=r"^webdep_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messages))
 
+    return application
+
+
+def main():
+    application = create_application()
     application.run_polling(allowed_updates=Update.ALL_TYPES, bootstrap_retries=5)
 
 if __name__ == '__main__':
