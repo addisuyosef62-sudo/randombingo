@@ -2,6 +2,7 @@ import os
 import re
 import secrets
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telegram.error import TelegramError
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler, 
     ConversationHandler, filters, ContextTypes
@@ -10,12 +11,12 @@ from telegram.helpers import escape_markdown
 from auth_utils import hash_password
 from supabase_client import SupabaseError, supabase_request
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-mini-app-url.com")
-ADMIN_ID = int(os.getenv("TELEGRAM_ADMIN_ID", "0"))
+BOT_TOKEN = '9267476327:AAFl8y4cHGgQ6il5hJz7IFUDb0UYj7DsDcU'
+WEB_APP_URL = "https://randombingo.onrender.com"
+ADMIN_ID = '7902432584'
 
 # Conversation states for Deposit
-WAITING_FOR_DEP_AMOUNT, CONFIRM_DEPOSIT = range(2)
+WAITING_FOR_DEP_AMOUNT, WAITING_FOR_DEP_PROOF, CONFIRM_DEPOSIT = range(3)
 
 users_db = {}
 
@@ -314,13 +315,29 @@ async def receive_deposit_amount(update: Update, context: ContextTypes.DEFAULT_T
     if text == "🔙 ወደ ኋላ ተመልስ":
         return await cancel_transaction(update, context)
 
-    if not text.isdigit():
-        await update.message.reply_text("⚠️ እባክዎን ትክክለኛ ቁጥር ብቻ ያስገቡ (ምሳሌ: 100):")
+    if not text.isdigit() or not 50 <= int(text) <= 100_000:
+        await update.message.reply_text("⚠️ Enter a whole amount between 50 and 100,000 ETB.")
         return WAITING_FOR_DEP_AMOUNT
 
     amount = float(text)
     context.user_data["deposit_amount"] = amount
+    await update.message.reply_text(
+        "Paste the complete payment receipt SMS for the administrator to verify:"
+    )
+    return WAITING_FOR_DEP_PROOF
+
+
+async def receive_deposit_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    proof = update.message.text.strip()
+    if proof == "🔙 ወደ ኋላ ተመልስ":
+        return await cancel_transaction(update, context)
+    if not 8 <= len(proof) <= 3000:
+        await update.message.reply_text("Receipt SMS must contain 8 to 3,000 characters.")
+        return WAITING_FOR_DEP_PROOF
+
+    context.user_data["deposit_proof"] = proof
     bank_name = context.user_data.get("selected_bank", "Bank")
+    amount = context.user_data["deposit_amount"]
 
     confirm_keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ አረጋግጥ (Confirm)", callback_data="confirm_deposit")]
@@ -347,35 +364,78 @@ async def confirm_deposit_action(update: Update, context: ContextTypes.DEFAULT_T
     user = query.from_user
     bank_name = context.user_data.get("selected_bank", "Bank")
     amount = context.user_data.get("deposit_amount", 0.0)
+    proof = context.user_data.get("deposit_proof", "")
     user_info = users_db.get(user.id, {})
     phone = user_info.get("phone", "N/A")
 
-    admin_markup = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Approve", callback_data=f"admin_app_dep_{user.id}_{amount}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"admin_rej_dep_{user.id}_{amount}")
-        ]
-    ])
-
-    admin_msg = (
-        f"📩 **አዲስ የገቢ (Deposit) ጥያቄ!**\n\n"
-        f"👤 **ስም:** {user.first_name}\n"
-        f"🆔 **ID:** `{user.id}`\n"
-        f"📱 **ስልክ:** {phone}\n"
-        f"🏦 **ባንክ:** {bank_name}\n"
-        f"💵 **መጠን:** {amount:.2f} ETB"
-    )
+    request_row = {
+        "user_id": f"tg_{user.id}",
+        "telegram_user_id": user.id,
+        "user_name": " ".join(
+            part for part in (user.first_name, getattr(user, "last_name", None)) if part
+        )[:120],
+        "amount": amount,
+        "payment_method": bank_name,
+        "payment_proof": proof,
+        "status": "pending_review",
+    }
 
     try:
-        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg, reply_markup=admin_markup, parse_mode="Markdown")
-    except Exception as e:
-        print(f"Error notifying admin: {e}")
+        inserted = supabase_request(
+            "POST",
+            "wallet_deposit_requests",
+            request_row,
+            prefer="return=representation",
+        )
+    except SupabaseError as exc:
+        if exc.status_code == 409:
+            await query.message.reply_text(
+                "You already have a deposit request awaiting admin review."
+            )
+        else:
+            print(f"Could not save Telegram deposit request: {exc}")
+            await query.message.reply_text("Could not save your deposit request. Please try again.")
+        return ConversationHandler.END
+
+    if not inserted:
+        await query.message.reply_text(
+            "The database did not confirm your request. Please contact the administrator."
+        )
+        return ConversationHandler.END
+
+    request_id = inserted[0]["id"]
+    admin_markup = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"webdep_{request_id}_approve"),
+        InlineKeyboardButton("❌ Reject", callback_data=f"webdep_{request_id}_reject"),
+    ]])
+    admin_msg = (
+        "New Telegram deposit request\n"
+        f"Request: {request_id}\n"
+        f"User: {request_row['user_name'] or user.id} (tg_{user.id})\n"
+        f"Phone: {phone}\n"
+        f"Amount: {amount:.2f} ETB\n"
+        f"Method: {bank_name}\n"
+        f"Receipt SMS:\n{proof}"
+    )
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=admin_msg,
+            reply_markup=admin_markup,
+        )
+    except TelegramError as exc:
+        print(f"Could not notify admin about deposit request {request_id}: {exc}")
+        await query.message.reply_text(
+            f"Request {request_id} was saved, but Telegram could not notify the administrator. "
+            "Please contact support."
+        )
+        return ConversationHandler.END
 
     success_text = (
         f"✅ **የገቢ ጥያቄዎ ለአድሚን ተልኳል!**\n\n"
         f"🏦 **ባንክ:** {bank_name}\n"
         f"💵 **መጠን:** {amount:.2f} ETB\n\n"
-        f"አድሚኑ ሲያረጋግጥልዎት ሂሳብዎ ላይ ገቢ ይደረጋል::"
+        "Your request is pending the administrator's review."
     )
 
     is_registered = user.id in users_db
@@ -398,47 +458,6 @@ async def cancel_transaction(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=get_keyboard(is_registered)
     )
     return ConversationHandler.END
-
-# --- ADMIN ACTIONS HANDLER ---
-
-async def handle_admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID:
-        await query.answer("You are not authorized to review transactions.", show_alert=True)
-        return
-
-    data = query.data.split("_")
-    action = data[1]       # app or rej
-    txn_type = data[2]     # dep or wth
-    if txn_type != "dep":
-        await query.answer("Withdrawals are not available until wagering is implemented.", show_alert=True)
-        return
-
-    await query.answer()
-    target_user_id = int(data[3])
-    amount = float(data[4])
-
-    user_info = users_db.get(target_user_id)
-
-    if action == "app":
-        if txn_type == "dep":
-            if user_info:
-                user_info["play_balance"] += amount
-            await context.bot.send_message(
-                chat_id=target_user_id,
-                text=f"🎉 **ገቢዎ ጸድቋል!**\n\n💰 **+{amount:.2f} ETB** በመጨወቻ ሂሳብዎ ላይ ተጨምሯል::",
-                parse_mode="Markdown"
-            )
-            await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED (+{amount:.2f} ETB Deposited)**")
-
-    elif action == "rej":
-        await context.bot.send_message(
-            chat_id=target_user_id,
-            text="❌ **የገቢ ጥያቄዎ ውድቅ ተደርጓል!**\n\nለበለጠ መረጃ አድሚኑን ያናግሩ::",
-            parse_mode="Markdown"
-        )
-        await query.edit_message_text(f"{query.message.text}\n\n❌ **REJECTED**")
-
 
 async def handle_web_deposit_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -571,6 +590,9 @@ def main():
                 CallbackQueryHandler(handle_bank_selection, pattern=r"^dep_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_deposit_amount),
             ],
+            WAITING_FOR_DEP_PROOF: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_deposit_proof),
+            ],
             CONFIRM_DEPOSIT: [
                 CallbackQueryHandler(confirm_deposit_action, pattern=r"^confirm_deposit$")
             ]
@@ -590,7 +612,6 @@ def main():
         MessageHandler(filters.Regex(r"^📤 ወጪ \(Withdraw\)$"), start_withdraw)
     )
     application.add_handler(CallbackQueryHandler(handle_web_deposit_review, pattern=r"^webdep_"))
-    application.add_handler(CallbackQueryHandler(handle_admin_actions, pattern=r"^admin_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messages))
 
     application.run_polling(allowed_updates=Update.ALL_TYPES, bootstrap_retries=5)

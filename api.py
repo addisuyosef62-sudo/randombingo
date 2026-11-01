@@ -27,7 +27,7 @@ if allowed_origin:
 class DepositRequest(BaseModel):
     amount: float = Field(ge=50, le=100_000)
     payment_method: Literal["TeleBirr", "CBE Birr"]
-    payment_proof: str = Field(min_length=8, max_length=10_000)
+    payment_proof: str = Field(min_length=8, max_length=3_000)
 
 
 class PasswordChange(BaseModel):
